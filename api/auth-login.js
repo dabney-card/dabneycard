@@ -12,7 +12,7 @@ export default async function handler(req, res) {
       return res.status(400).json({ error: "Email and password required" });
     }
 
-    // Fetch user from vendor_users
+    // Look up user
     const { data: user, error: userErr } = await supa
       .from("vendor_users")
       .select("id,email,password_hash,role,vendor_id")
@@ -30,14 +30,18 @@ export default async function handler(req, res) {
       return res.status(401).json({ error: "Invalid login: no such user" });
     }
 
-    // Check password
+    // Debug bcrypt comparison
+    console.log("Comparing password:", password);
+    console.log("Against hash:", user.password_hash);
+
     const ok = await bcrypt.compare(password, user.password_hash || "");
+    console.log("Compare result:", ok);
+
     if (!ok) {
-      console.warn("Password mismatch for:", email);
       return res.status(401).json({ error: "Invalid login: wrong password" });
     }
 
-    // Fetch vendor
+    // Look up vendor
     const { data: vendor, error: vendorErr } = await supa
       .from("vendors")
       .select("id,name,attribute_key")
@@ -55,7 +59,7 @@ export default async function handler(req, res) {
       return res.status(400).json({ error: "Vendor not found" });
     }
 
-    // Create JWT
+    // Sign JWT
     const token = signJWT({
       vendor_user_id: user.id,
       vendor_id: vendor.id,
