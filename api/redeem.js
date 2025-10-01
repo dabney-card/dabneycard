@@ -1,27 +1,78 @@
-import { verifyJWT, passkitGetMember, passkitSetAttr, supa } from "./_lib.js";
+import jwt from "jsonwebtoken";
 
-export default async function handler(req) {
-  if (req.method !== "POST") return new Response("Method Not Allowed", { status: 405 });
-  const auth = verifyJWT(req);
-  const { member_id, reward } = await req.json();
-
-  const need = reward === "12OFF" ? 100 : 50;
-  const m = await passkitGetMember(member_id);
-  const cur = (m.customAttributes?.[auth.attribute_key] ?? 0);
-  if (cur < need) return new Response(JSON.stringify({ error: "Not enough points" }), { status: 400 });
-
-  const next = cur - need;
-  await passkitSetAttr(member_id, auth.attribute_key, next);
-  const redemption_code = Math.random().toString(36).slice(2,8).toUpperCase();
-
-  await supa.from("audit_logs").insert({
-    vendor_id: auth.vendor_id,
-    vendor_user_id: auth.vendor_user_id,
-    member_id,
-    action: "redeem",
-    points_delta: -need,
-    metadata: { reward, redemption_code }
+function parseBody(req) {
+  return new Promise((resolve, reject) => {
+    let body = "";
+    req.on("data", (chunk) => { body += chunk; });
+    req.on("end", () => {
+      try { resolve(JSON.parse(body)); }
+      catch (err) { reject(err); }
+    });
+    req.on("error", reject);
   });
+}
 
-  return new Response(JSON.stringify({ member_id, new_points: next, redemption_code }), { status: 200 });
+function verifyJWT(req) {
+  const authHeader = req.headers["authorization"];
+  if (!authHeader) throw new Error("Missing Authorization header");
+  const token = authHeader.replace("Bearer ", "");
+  return jwt.verify(token, process.env.JWT_SECRET);
+}
+
+async function passkitGetMember(memberId) {
+  const resp = await fetch(
+    `${process.env.PASSKIT_API_BASE}/membership/members/${memberId}`,
+    { headers: { Authorization: `Bearer ${process.env.PASSKIT_API_KEY}` } }
+  );
+  if (!resp.ok) throw new Error(`PassKit GET failed: ${resp.status}`);
+  return resp.json();
+}
+
+async function passkitSetAttr(memberId, attributeKey, value) {
+  const resp = await fetch(
+    `${process.env.PASSKIT_API_BASE}/membership/members/${memberId}`,
+    {
+      method: "PATCH",
+      headers: {
+        "Content-Type": "application/json",
+        Authorization: `Bearer ${process.env.PASSKIT_API_KEY}`,
+      },
+      body: JSON.stringify({ customAttributes: { [attributeKey]: String(value) } }),
+    }
+  );
+  if (!resp.ok) throw new Error(`PassKit PATCH failed: ${resp.status}`);
+  return resp.json();
+}
+
+export default async function handler(req, res) {
+  if (req.method !== "POST") {
+    return res.status(405).json({ error: "Method not allowed" });
+  }
+
+  try {
+    const decoded = verifyJWT(req);
+    const { memberId, amount } = await parseBody(req);
+
+    if (!memberId || !amount) {
+      return res.status(400).json({ error: "memberId and amount required" });
+    }
+
+    const member = await passkitGetMember(memberId);
+    const current = parseInt(
+      member.customAttributes?.[decoded.attribute_key] || "0",
+      10
+    );
+
+    if (current < amount) {
+      return res.status(400).json({ error: "Not enough points" });
+    }
+
+    const newPoints = current - amount;
+    await passkitSetAttr(memberId, decoded.attribute_key, newPoints);
+
+    return res.status(200).json({ success: true, newPoints });
+  } catch (err) {
+    console.error("❌ Redeem error:", err);
+    return res.status(500).json({ error: "Server error" });
+  }
 }
