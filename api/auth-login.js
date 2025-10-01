@@ -12,7 +12,7 @@ export default async function handler(req, res) {
       return res.status(400).json({ error: "Email and password required" });
     }
 
-    // Fetch user
+    // Fetch user from vendor_users
     const { data: user, error: userErr } = await supa
       .from("vendor_users")
       .select("id,email,password_hash,role,vendor_id")
@@ -20,18 +20,21 @@ export default async function handler(req, res) {
       .limit(1)
       .maybeSingle();
 
+    console.log("USER LOOKUP RESULT:", user, userErr);
+
     if (userErr) {
       console.error("Supabase error (vendor_users):", userErr);
       return res.status(500).json({ error: "Auth query failed" });
     }
     if (!user) {
-      return res.status(401).json({ error: "Invalid login" });
+      return res.status(401).json({ error: "Invalid login: no such user" });
     }
 
     // Check password
-    const ok = await bcrypt.compare(password, user.password_hash);
+    const ok = await bcrypt.compare(password, user.password_hash || "");
     if (!ok) {
-      return res.status(401).json({ error: "Invalid login" });
+      console.warn("Password mismatch for:", email);
+      return res.status(401).json({ error: "Invalid login: wrong password" });
     }
 
     // Fetch vendor
@@ -41,6 +44,8 @@ export default async function handler(req, res) {
       .eq("id", user.vendor_id)
       .limit(1)
       .maybeSingle();
+
+    console.log("VENDOR LOOKUP RESULT:", vendor, vendorErr);
 
     if (vendorErr) {
       console.error("Supabase error (vendors):", vendorErr);
