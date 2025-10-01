@@ -1,23 +1,43 @@
-import { verifyJWT } from "./_lib.js";
+import jwt from "jsonwebtoken";
+
+function parseBody(req) {
+  return new Promise((resolve, reject) => {
+    let body = "";
+    req.on("data", (chunk) => { body += chunk; });
+    req.on("end", () => {
+      try { resolve(JSON.parse(body || "{}")); }
+      catch (err) { reject(err); }
+    });
+    req.on("error", reject);
+  });
+}
+
+function verifyJWT(req) {
+  const authHeader = req.headers["authorization"];
+  if (!authHeader) throw new Error("Missing Authorization header");
+  const token = authHeader.replace("Bearer ", "");
+  return jwt.verify(token, process.env.JWT_SECRET);
+}
 
 export default async function handler(req, res) {
+  if (req.method !== "POST") {
+    return res.status(405).json({ error: "Method not allowed" });
+  }
+
   try {
-    if (req.method !== "POST") {
-      return res.status(405).json({ error: "Method not allowed" });
-    }
+    const decoded = verifyJWT(req);
+    const body = await parseBody(req);
 
-    // Verify token
-    const payload = verifyJWT(req);
-    console.log("SCAN payload:", payload);
+    console.log("SCAN payload:", decoded);
 
-    // Example: respond with the payload and any body data
     return res.status(200).json({
       ok: true,
-      vendor: payload.vendor_name,
-      data: req.body || {}
+      vendor: decoded.vendor_name,
+      vendor_id: decoded.vendor_id,
+      data: body
     });
   } catch (err) {
-    console.error("SCAN error:", err);
-    return res.status(401).json({ error: "Invalid or missing token" });
+    console.error("❌ Scan error:", err);
+    return res.status(500).json({ error: "Server error" });
   }
 }
