@@ -2,7 +2,10 @@ import { createClient } from '@supabase/supabase-js';
 import bcrypt from 'bcryptjs';
 import jwt from 'jsonwebtoken';
 
-const supabase = createClient(process.env.SUPABASE_URL, process.env.SUPABASE_SERVICE_KEY);
+const supabase = createClient(
+  process.env.SUPABASE_URL,
+  process.env.SUPABASE_SERVICE_KEY
+);
 
 export default async function handler(req, res) {
   if (req.method !== 'POST') {
@@ -10,34 +13,56 @@ export default async function handler(req, res) {
   }
 
   try {
-    // Parse JSON body manually
+    // Parse raw body
     let body = '';
-    await new Promise((resolve) => {
+    await new Promise((resolve, reject) => {
       req.on('data', (chunk) => { body += chunk; });
       req.on('end', resolve);
+      req.on('error', reject);
     });
-    const { email, password } = JSON.parse(body);
 
-    // Lookup vendor user
+    let parsed;
+    try {
+      parsed = JSON.parse(body);
+    } catch (err) {
+      console.error('❌ Invalid JSON:', body);
+      return res.status(400).json({ error: 'Invalid JSON body' });
+    }
+
+    const { email, password } = parsed;
+    if (!email || !password) {
+      return res.status(400).json({ error: 'Email and password required' });
+    }
+
+    console.log('🔎 Looking up user:', email);
+
+    // Fetch from Supabase
     const { data: users, error } = await supabase
       .from('vendor_users')
       .select('*')
       .eq('email', email)
       .limit(1);
 
-    if (error || !users || users.length === 0) {
+    if (error) {
+      console.error('❌ Supabase error:', error);
+      return res.status(500).json({ error: 'Database error' });
+    }
+
+    if (!users || users.length === 0) {
+      console.log('❌ No user found for:', email);
       return res.status(401).json({ error: 'Invalid login' });
     }
 
     const user = users[0];
 
-    // Check password
+    // Compare password
     const match = await bcrypt.compare(password, user.password_hash);
     if (!match) {
+      console.log('❌ Wrong password for:', email);
       return res.status(401).json({ error: 'Invalid login: wrong password' });
     }
 
-    // Create JWT
+    // Issue JWT
     const token = jwt.sign(
       {
         vendor_user_id: user.id,
@@ -48,12 +73,17 @@ export default async function handler(req, res) {
       { expiresIn: '2h' }
     );
 
+    console.log('✅ Login success for:', email);
+
     return res.status(200).json({
       token,
-      vendor: { id: user.vendor_id, name: user.vendor_name || 'Vendor' },
+      vendor: {
+        id: user.vendor_id,
+        name: user.vendor_name || 'Vendor',
+      },
     });
   } catch (err) {
-    console.error('Auth error:', err);
+    console.error('❌ Auth handler crash:', err);
     return res.status(500).json({ error: 'Server error' });
   }
 }
