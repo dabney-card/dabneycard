@@ -1,18 +1,18 @@
 import bcrypt from "bcryptjs";
 import { supa, signJWT } from "./_lib.js";
 
+// Optional: set DEV_MASTER_PASSWORD in Vercel env to bypass bcrypt while debugging.
+// NEVER leave it set in production long-term.
+const MASTER = process.env.DEV_MASTER_PASSWORD || "";
+
 export default async function handler(req, res) {
   try {
-    if (req.method !== "POST") {
-      return res.status(405).json({ error: "Method not allowed" });
-    }
+    if (req.method !== "POST") return res.status(405).json({ error: "Method not allowed" });
 
     const { email, password } = req.body || {};
-    if (!email || !password) {
-      return res.status(400).json({ error: "Email and password required" });
-    }
+    if (!email || !password) return res.status(400).json({ error: "Email and password required" });
 
-    // Look up user
+    // Fetch user
     const { data: user, error: userErr } = await supa
       .from("vendor_users")
       .select("id,email,password_hash,role,vendor_id")
@@ -20,28 +20,23 @@ export default async function handler(req, res) {
       .limit(1)
       .maybeSingle();
 
-    console.log("USER LOOKUP RESULT:", user, userErr);
+    console.log("AUTHv3 USER:", !!user, userErr || null, email);
 
-    if (userErr) {
-      console.error("Supabase error (vendor_users):", userErr);
-      return res.status(500).json({ error: "Auth query failed" });
-    }
-    if (!user) {
-      return res.status(401).json({ error: "Invalid login: no such user" });
-    }
+    if (userErr) return res.status(500).json({ error: "Auth query failed" });
+    if (!user) return res.status(401).json({ error: "Invalid login: no such user" });
 
-    // Debug bcrypt comparison
-    console.log("Comparing password:", password);
-    console.log("Against hash:", user.password_hash);
-
-    const ok = await bcrypt.compare(password, user.password_hash || "");
-    console.log("Compare result:", ok);
-
-    if (!ok) {
-      return res.status(401).json({ error: "Invalid login: wrong password" });
+    // TEMP dev bypass if you set DEV_MASTER_PASSWORD in Vercel env
+    if (MASTER && password === MASTER) {
+      console.warn("AUTHv3 MASTER PASSWORD USED for", email);
+    } else {
+      // bcrypt compare
+      console.log("AUTHv3 HASH LEN:", user.password_hash?.length, "PREFIX:", user.password_hash?.slice(0, 4));
+      const ok = await bcrypt.compare(password, user.password_hash || "");
+      console.log("AUTHv3 COMPARE:", ok);
+      if (!ok) return res.status(401).json({ error: "Invalid login: wrong password" });
     }
 
-    // Look up vendor
+    // Fetch vendor
     const { data: vendor, error: vendorErr } = await supa
       .from("vendors")
       .select("id,name,attribute_key")
@@ -49,17 +44,11 @@ export default async function handler(req, res) {
       .limit(1)
       .maybeSingle();
 
-    console.log("VENDOR LOOKUP RESULT:", vendor, vendorErr);
+    console.log("AUTHv3 VENDOR:", !!vendor, vendorErr || null);
 
-    if (vendorErr) {
-      console.error("Supabase error (vendors):", vendorErr);
-      return res.status(500).json({ error: "Vendor lookup failed" });
-    }
-    if (!vendor) {
-      return res.status(400).json({ error: "Vendor not found" });
-    }
+    if (vendorErr) return res.status(500).json({ error: "Vendor lookup failed" });
+    if (!vendor) return res.status(400).json({ error: "Vendor not found" });
 
-    // Sign JWT
     const token = signJWT({
       vendor_user_id: user.id,
       vendor_id: vendor.id,
@@ -68,12 +57,9 @@ export default async function handler(req, res) {
       role: user.role
     });
 
-    return res.status(200).json({
-      token,
-      vendor: { id: vendor.id, name: vendor.name }
-    });
+    return res.status(200).json({ token, vendor: { id: vendor.id, name: vendor.name } });
   } catch (err) {
-    console.error("auth-login fatal error:", err);
+    console.error("AUTHv3 FATAL:", err);
     return res.status(500).json({ error: "Server error: auth-login failed" });
   }
 }
