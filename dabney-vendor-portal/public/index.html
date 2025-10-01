@@ -1,0 +1,38 @@
+<!doctype html>
+<html>
+<head>
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <link rel="stylesheet" href="/app.css" />
+  <title>Dabney Vendor</title>
+</head>
+<body>
+  <div class="wrap">
+    <h2>Dabney Vendor</h2>
+
+    <form id="login">
+      <input name="email" type="email" placeholder="Email" required />
+      <input name="password" type="password" placeholder="Password" required />
+      <label><input id="remember" type="checkbox" /> Keep me logged in</label>
+      <button type="submit">Log in</button>
+    </form>
+
+    <div id="app" class="hide">
+      <div class="row">
+        <input id="member" placeholder="Scan or enter member ID" />
+        <button id="scan">Scan</button>
+      </div>
+      <div id="balance">Points: —</div>
+      <div class="row">
+        <input id="amount" type="number" min="0" step="1" placeholder="$ amount" />
+        <button id="earn">Earn</button>
+      </div>
+      <div class="row">
+        <button id="r50">Redeem 5% (50)</button>
+        <button id="r100">Redeem 12% (100)</button>
+      </div>
+      <div id="status"></div>
+    </div>
+  </div>
+  <script src="/app.js"></script>
+</body>
+</html>
