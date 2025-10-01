@@ -1,43 +1,19 @@
-import jwt from "jsonwebtoken";
+// /pages/api/scan.ts
+import type { NextApiRequest, NextApiResponse } from "next";
+import { getPasskitToken, passkitFetch, requireVendorUser } from "../../server/lib";
 
-function parseBody(req) {
-  return new Promise((resolve, reject) => {
-    let body = "";
-    req.on("data", (chunk) => { body += chunk; });
-    req.on("end", () => {
-      try { resolve(JSON.parse(body || "{}")); }
-      catch (err) { reject(err); }
-    });
-    req.on("error", reject);
+export default async function handler(req: NextApiRequest, res: NextApiResponse) {
+  const user = await requireVendorUser(req, res); // your session auth
+  const { memberId } = req.query;
+  if (!memberId || typeof memberId !== "string") return res.status(400).json({ error: "memberId required" });
+
+  const token = await getPasskitToken(); // long-lived or refreshed
+  const member = await passkitFetch(`/members/member/${memberId}`, { token });
+
+  // Optional: enforce vendor permissions here (e.g., which meta fields they can view)
+  return res.json({
+    memberId: memberId,
+    name: member.person?.displayName ?? "",
+    meta: member.meta ?? {},
   });
-}
-
-function verifyJWT(req) {
-  const authHeader = req.headers["authorization"];
-  if (!authHeader) throw new Error("Missing Authorization header");
-  const token = authHeader.replace("Bearer ", "");
-  return jwt.verify(token, process.env.JWT_SECRET);
-}
-
-export default async function handler(req, res) {
-  if (req.method !== "POST") {
-    return res.status(405).json({ error: "Method not allowed" });
-  }
-
-  try {
-    const decoded = verifyJWT(req);
-    const body = await parseBody(req);
-
-    console.log("SCAN payload:", decoded);
-
-    return res.status(200).json({
-      ok: true,
-      vendor: decoded.vendor_name,
-      vendor_id: decoded.vendor_id,
-      data: body
-    });
-  } catch (err) {
-    console.error("❌ Scan error:", err);
-    return res.status(500).json({ error: "Server error" });
-  }
 }
