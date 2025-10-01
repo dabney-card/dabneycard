@@ -1,13 +1,13 @@
 import jwt from "jsonwebtoken";
 
-// ---- utils ----
+/** ---- utils ---- */
 function parseBody(req) {
   return new Promise((resolve, reject) => {
     let body = "";
-    req.on("data", (chunk) => { body += chunk; });
+    req.on("data", (c) => { body += c; });
     req.on("end", () => {
       try { resolve(JSON.parse(body || "{}")); }
-      catch (err) { reject(new Error("Invalid JSON body")); }
+      catch { reject(new Error("Invalid JSON body")); }
     });
     req.on("error", reject);
   });
@@ -26,67 +26,67 @@ async function passkitGetMember(memberId) {
     headers: { Authorization: `Bearer ${process.env.PASSKIT_API_KEY}` }
   });
   if (!resp.ok) {
-    const txt = await resp.text();
-    throw new Error(`PassKit GET ${resp.status}: ${txt}`);
+    const text = await resp.text().catch(() => "");
+    console.error("PASSKIT GET ERROR:", resp.status, text);
+    throw new Error(`PassKit GET failed (${resp.status})`);
   }
   return resp.json();
 }
 
 async function passkitSetAttr(memberId, attributeKey, value) {
   const url = `${process.env.PASSKIT_API_BASE}/membership/members/${encodeURIComponent(memberId)}`;
+  const body = { customAttributes: { [attributeKey]: String(value) } };
   const resp = await fetch(url, {
     method: "PATCH",
     headers: {
       "Content-Type": "application/json",
       Authorization: `Bearer ${process.env.PASSKIT_API_KEY}`
     },
-    body: JSON.stringify({ customAttributes: { [attributeKey]: String(value) } })
+    body: JSON.stringify(body)
   });
   if (!resp.ok) {
-    const txt = await resp.text();
-    throw new Error(`PassKit PATCH ${resp.status}: ${txt}`);
+    const text = await resp.text().catch(() => "");
+    console.error("PASSKIT PATCH ERROR:", resp.status, text, "BODY SENT:", body);
+    throw new Error(`PassKit PATCH failed (${resp.status})`);
   }
   return resp.json();
 }
 
-// ---- handler ----
+/** ---- handler ---- */
 export default async function handler(req, res) {
-  if (req.method !== "POST") {
-    return res.status(405).json({ error: "Method not allowed" });
-  }
+  if (req.method !== "POST") return res.status(405).json({ error: "Method not allowed" });
 
   try {
-    const decoded = verifyJWT(req); // { vendor_id, vendor_name, attribute_key, ... }
-    const body = await parseBody(req);
-    const memberId = body?.memberId;
-    const amountRaw = body?.amount;
+    const decoded = verifyJWT(req); // contains attribute_key, vendor_name, etc.
+    const { memberId, amount } = await parseBody(req);
 
-    // Basic validation + logging to help you debug the frontend request
-    console.log("EARN incoming body:", body);
-    if (!memberId || amountRaw === undefined || amountRaw === null) {
+    console.log("EARN incoming:", { memberId, amount, vendor: decoded.vendor_name, attr: decoded.attribute_key });
+
+    if (!memberId || amount === undefined || amount === null) {
       return res.status(400).json({ error: "memberId and amount required" });
     }
 
-    // Force number; reject NaN/negative
-    const amount = Number(amountRaw);
-    if (!Number.isFinite(amount) || amount <= 0) {
+    const amt = Number(amount);
+    if (!Number.isFinite(amt) || amt <= 0) {
       return res.status(400).json({ error: "amount must be a positive number" });
     }
 
-    // Read current points from the vendor-specific attribute on the member
-    const member = await passkitGetMember(memberId);
     const attrKey = decoded.attribute_key || "meta.harrysMarket";
+
+    // 1) Read current member
+    const member = await passkitGetMember(memberId);
+
+    // 2) Parse current points in this vendor channel
     const current = parseInt(member?.customAttributes?.[attrKey] ?? "0", 10) || 0;
 
-    // Points math
+    // 3) Compute earned
     const factor = parseInt(process.env.POINTS_PER_DOLLAR || "1", 10) || 1;
-    const earned = Math.floor(amount * factor);
+    const earned = Math.floor(amt * factor);
     const newPoints = current + earned;
 
-    // Write back to PassKit
+    // 4) Update back to PassKit
     await passkitSetAttr(memberId, attrKey, newPoints);
 
-    // Done
     return res.status(200).json({
       success: true,
       vendor: decoded.vendor_name,
@@ -95,8 +95,10 @@ export default async function handler(req, res) {
       newPoints
     });
   } catch (err) {
-    console.error("❌ /api/earn error:", err);
-    // Keep response concise but useful
-    return res.status(500).json({ error: "Server error" });
+    console.error("❌ /api/earn crash:", err);
+    // Keep response generic, include status hint if our thrown message contains it
+    const m = String(err.message || "");
+    const hint = m.includes("PassKit") ? m : "Server error";
+    return res.status(500).json({ error: hint });
   }
 }
